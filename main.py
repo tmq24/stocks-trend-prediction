@@ -1,152 +1,180 @@
-import pandas as pd
-import numpy as np
+"""
+Stock Close Price Prediction Benchmark Pipeline
+
+5 Models: transformer_encoder, transformer_decoder, vanilla_transformer, lstm, nbeats
+Split (date-based):
+  - Train: 2015-08-10 to 2021-12-31
+  - Val: 2022-01-01 to 2023-12-31
+  - Test: 2024-01-01 to 2025-06-20
+Test: Evaluated separately per ticker
+Models: Saved to models/
+Plots: Generated for sample tickers (AAPL, PEP)
+"""
+
+import argparse
 import os
-import matplotlib.pyplot as plt
-from features import add_features
-from alpha_generator import GeminiAlphaGenerator, calculate_generated_alphas_dynamic
-from scaling import full_scale_pipeline
-from model import FinancialTransformer, FinancialDataset, prepare_data_for_model, train_model
-from evaluate import evaluate_model
-from plot import plot_predictions_real
-from torch.utils.data import DataLoader
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+
+# ================================================================
+# CONFIGURATION
+# ================================================================
+
+MODELS = [
+    'transformer_encoder',
+    'transformer_decoder',
+    'vanilla_transformer',
+    'lstm',
+    'nbeats'
+]
+
+INPUT_WINDOWS = [5, 10, 15]
+OUTPUT_HORIZONS = [1, 5, 10]
+
+STOCKS = ['AAPL', 'HSBC', 'PEP', 'TM', 'TCEHY']
+SAMPLE_TICKERS = ['AAPL', 'PEP']
+
+
+# ================================================================
+# PIPELINE FUNCTIONS
+# ================================================================
+
+def run_full_benchmark(verbose: bool = True, generate_plots: bool = True):
+    """Run the full benchmark with per-ticker evaluation."""
+    from src.benchmark import run_benchmark
+    
+    print("=" * 60)
+    print("STOCK CLOSE PRICE PREDICTION BENCHMARK")
+    print("=" * 60)
+    print(f"Models: {len(MODELS)} ({', '.join(MODELS)})")
+    print(f"Input Windows: {INPUT_WINDOWS}")
+    print(f"Output Horizons: {OUTPUT_HORIZONS}")
+    print(f"Stocks: {STOCKS}")
+    print(f"Plot Samples: {SAMPLE_TICKERS}")
+    print(f"Split: Train(~2021) / Val(2022-2023) / Test(2024+)")
+    total = len(MODELS) * len(INPUT_WINDOWS) * len(OUTPUT_HORIZONS)
+    print(f"Total Experiments: {total}")
+    print("=" * 60)
+    
+    results = run_benchmark(
+        models=MODELS,
+        input_windows=INPUT_WINDOWS,
+        output_horizons=OUTPUT_HORIZONS,
+        stocks=STOCKS,
+        output_dir="evaluation",
+        verbose=verbose,
+        generate_plots=generate_plots,
+        plot_tickers=SAMPLE_TICKERS
+    )
+    
+    return results
+
+
+def run_quick_test():
+    """Run a quick test with subset of configurations."""
+    from src.benchmark import run_benchmark
+    
+    print("Running quick test...")
+    
+    results = run_benchmark(
+        models=['lstm', 'nbeats'],
+        input_windows=[10],
+        output_horizons=[1],
+        stocks=STOCKS,
+        output_dir="evaluation",
+        verbose=True,
+        generate_plots=True,
+        plot_tickers=SAMPLE_TICKERS
+    )
+    
+    return results
+
+
+def run_single_experiment(model: str, window: int, horizon: int):
+    """Run a single experiment with per-ticker evaluation."""
+    from src.benchmark import BenchmarkRunner
+    
+    runner = BenchmarkRunner(
+        models=[model],
+        input_windows=[window],
+        output_horizons=[horizon],
+        stocks=STOCKS,
+        plot_tickers=SAMPLE_TICKERS
+    )
+    
+    results = runner.run_single_experiment(
+        model_type=model,
+        window_size=window,
+        horizon=horizon,
+        verbose=True,
+        generate_plots=True
+    )
+    
+    print("\nPer-Ticker Results:")
+    for r in results:
+        print(f"  {r['ticker']}: MAE={r['mae']:.6f}, MSE={r['mse']:.6f}")
+    
+    return results
+
+
+# ================================================================
+# MAIN
+# ================================================================
+
 def main():
-    # ============================================================
-    # 1. Đọc dữ liệu & Chia Hybrid Train/Test
-    # ============================================================
-    df = pd.read_csv("https://drive.google.com/uc?export=download&id=11jFbimgU65UG6F-QPzfoSoDR8b1oPrUh")
-    df['date'] = pd.to_datetime(df['date'])
-    df = df.sort_values(['ticker', 'date']).reset_index(drop=True)
-
-    # Hybrid split: mỗi công ty train trước 2023, test sau 2023
-    train_list, test_list = [], []
-    for ticker in df['ticker'].unique():
-        sub = df[df['ticker'] == ticker]
-        train = sub[sub['date'] < '2023-01-01']
-        test = sub[sub['date'] >= '2023-01-01']
-        train_list.append(train)
-        test_list.append(test)
-    train_df = pd.concat(train_list).reset_index(drop=True)
-    test_df = pd.concat(test_list).reset_index(drop=True)
-    print(f"Hybrid split done: {df['ticker'].nunique()} companies")
-    print(f"Train: {train_df.shape}, Test: {test_df.shape}")
-
-    # ============================================================
-    # 2. Tạo đặc trưng kỹ thuật
-    # ============================================================
-    train_df = add_features(train_df)
-    test_df = add_features(test_df)
-    print("Features added:", train_df.columns.tolist())
-
-    # ============================================================
-    # 3. Tạo và áp dụng Alpha bằng Gemini
-    # ============================================================
-    gemini_gen = GeminiAlphaGenerator(os.getenv('GEMINI_API_KEY'))
-    features = list(train_df.columns)
-    alphas = gemini_gen.generate_alpha_formulas(features, sample_df=train_df)
-
-    if alphas:
-        print("\nÁp dụng các Alpha lên dữ liệu...")
-        train_final = train_df.groupby('ticker').apply(lambda g: calculate_generated_alphas_dynamic(g, alphas)).reset_index(drop=True)
-        test_final = test_df.groupby('ticker').apply(lambda g: calculate_generated_alphas_dynamic(g, alphas)).reset_index(drop=True)
-
-        train_final.fillna(train_final.mean(numeric_only=True), inplace=True)
-        test_final.fillna(test_final.mean(numeric_only=True), inplace=True)
-
-        train_df = train_final
-        test_df = test_final
-
-        print("\n✓ HOÀN THÀNH TOÀN BỘ PIPELINE!")
-        print("DataFrame giờ có các Alpha mới từ Gemini dựa trên technical indicators.")
+    parser = argparse.ArgumentParser(
+        description='Stock Close Price Prediction Benchmark'
+    )
+    
+    subparsers = parser.add_subparsers(dest='command', help='Commands')
+    
+    # Benchmark command
+    bench_parser = subparsers.add_parser('benchmark', help='Run full benchmark')
+    bench_parser.add_argument('--quiet', action='store_true', 
+                              help='Reduce output verbosity')
+    bench_parser.add_argument('--no-plots', action='store_true',
+                              help='Skip plot generation')
+    
+    # Quick test command
+    subparsers.add_parser('test', help='Run quick test')
+    
+    # Single experiment command
+    single_parser = subparsers.add_parser('single', help='Run single experiment')
+    single_parser.add_argument('--model', type=str, required=True,
+                               choices=MODELS, help='Model type')
+    single_parser.add_argument('--window', type=int, required=True,
+                               help='Input window size')
+    single_parser.add_argument('--horizon', type=int, required=True,
+                               help='Output horizon')
+    
+    args = parser.parse_args()
+    
+    if args.command == 'benchmark':
+        run_full_benchmark(
+            verbose=not args.quiet, 
+            generate_plots=not args.no_plots
+        )
+    
+    elif args.command == 'test':
+        run_quick_test()
+    
+    elif args.command == 'single':
+        run_single_experiment(
+            model=args.model,
+            window=args.window,
+            horizon=args.horizon
+        )
+    
     else:
-        print("✗ Không tạo được Alpha từ Gemini.")
-        return  # Thoát nếu không có alpha
+        parser.print_help()
+        print("\nExamples:")
+        print("  python main.py benchmark              # Run full benchmark")
+        print("  python main.py benchmark --no-plots   # Skip plot generation")
+        print("  python main.py test                   # Quick test with 2 models")
+        print("  python main.py single --model lstm --window 10 --horizon 1")
 
-    # ============================================================
-    # 4. Scaling pipeline
-    # ============================================================
-    df_train_normalized, df_test_normalized, feature_cols, x_scaler, y_scaler = full_scale_pipeline(train_df, test_df)
-
-    # ============================================================
-    # 5. Chuẩn bị dữ liệu cho model
-    # ============================================================
-    print("=" * 70)
-    print("FINANCIAL TRANSFORMER - TRAINING PIPELINE")
-    print("=" * 70)
-
-    print("\n📂 Bước 1: Chuẩn bị dữ liệu...")
-    window_size = 5
-    src_num_train, src_tm_train, tgt_num_train, tgt_tm_train, labels_train = prepare_data_for_model(df_train_normalized, window_size)
-    src_num_test, src_tm_test, tgt_num_test, tgt_tm_test, labels_test = prepare_data_for_model(df_test_normalized, window_size)
-
-    print(f"✓ Training samples: {len(labels_train):,}")
-    print(f"✓ Test samples: {len(labels_test):,}")
-    print(f"✓ Window size: {window_size} days")
-
-    # ============================================================
-    # 6. Tạo DataLoader
-    # ============================================================
-    print("\n📦 Bước 2: Tạo DataLoader...")
-    batch_size = 32
-    train_dataset = FinancialDataset(src_num_train, src_tm_train, tgt_num_train, tgt_tm_train, labels_train)
-    test_dataset = FinancialDataset(src_num_test, src_tm_test, tgt_num_test, tgt_tm_test, labels_test)
-
-    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
-    test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
-
-    print(f"✓ Batch size: {batch_size}")
-    print(f"✓ Train batches: {len(train_loader)}")
-    print(f"✓ Test batches: {len(test_loader)}")
-
-    # ============================================================
-    # 7. Khởi tạo model
-    # ============================================================
-    print("\n🧠 Bước 3: Khởi tạo Model...")
-    model = FinancialTransformer(
-        d_model=512,
-        window_size=window_size,
-        num_enc_features=5,
-        num_dec_features=1,
-        nhead=8,
-        num_layers=2,
-        dropout=0.1
-    )
-    print(f"✓ Model architecture: Transformer Encoder-Decoder")
-    print(f"✓ d_model=512, nhead=8, num_layers=2")
-
-    # ============================================================
-    # 8. Huấn luyện model
-    # ============================================================
-    print("\n🔥 Bước 4: Bắt đầu Training với Validation...")
-    trained_model = train_model(
-        model,
-        train_loader,
-        test_loader=test_loader,
-        num_epochs=50,
-        learning_rate=1e-4
-    )
-    print("✅ PIPELINE HOÀN THÀNH!")
-
-    # ============================================================
-    # 9. Đánh giá model
-    # ============================================================
-    mse, rmse, mae, preds, trues = evaluate_model(
-        model=trained_model,
-        test_df_normalized=df_test_normalized,
-        y_scaler=y_scaler,
-        window_size=window_size,
-        batch_size=batch_size,
-        show_samples=30
-    )
-
-    # ============================================================
-    # 10. Vẽ biểu đồ
-    # ============================================================
-    plot_predictions_real(
-        preds=preds,
-        trues=trues,
-        df_test_raw=test_df,
-        window_size=window_size
-    )
 
 if __name__ == "__main__":
     main()

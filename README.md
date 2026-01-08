@@ -1,86 +1,78 @@
-# Stock Short-Term Prediction with Transformer & Gemini Alphas
+# Stock Close Price Prediction Benchmark
 
-Dự án dự báo giá cổ phiếu **ngắn hạn (next-day prediction)** sử dụng mô hình **Transformer Encoder-Decoder** kết hợp với các **alpha công thức** được sinh tự động bởi **Gemini AI**.
+This repository implements a benchmark for predicting stock **Log Close Prices** using various Deep Learning architectures. The project uses 23 technical indicators as features and evaluates models on a per-ticker basis.
 
-### Mục tiêu
-- Dự đoán **giá đóng cửa ngày kế tiếp** (`adjClose`) cho từng cổ phiếu
-- Sử dụng context lịch sử **20 ngày** gần nhất (window_size = 20)
-- Kết hợp các chỉ báo kỹ thuật + 5 công thức alpha sáng tạo từ Gemini
-- Đánh giá bằng RMSE, MAE và vẽ biểu đồ so sánh thực tế vs dự đoán
+## Overview
 
-## Yêu cầu hệ thống (Windows)
-- Windows 10/11
-- Python 3.10 hoặc 3.11 (khuyến nghị)
-- RAM ≥ 8GB
-- GPU NVIDIA + CUDA (tùy chọn, để train nhanh hơn)
+- **Task**: Predict Log Close Price at horizon $t+h$.
+- **Features**: 23 technical indicators (SMA, RSI, MACD, Bollinger Bands, etc.).
+- **Data Split**:
+  - **Train**: 2015-2021 (Combined across tickers).
+  - **Validation**: 2022-2023 (Combined across tickers).
+  - **Test**: 2024-2025 (Evaluated per-ticker: AAPL, HSBC, PEP, TM, TCEHY).
 
-## Hướng dẫn cài đặt và chạy trên Windows
+## Models Implemented
 
-### 1. Tạo môi trường ảo (virtual environment)
-Mở **PowerShell** (nhấn Windows → gõ PowerShell → chạy với quyền bình thường):
+1. **LSTM**: Standard Long Short-Term Memory network.
+2. **N-BEATS**: Neural basis expansion analysis for interpretable time series forecasting (Trend, Seasonality, and Generic blocks).
+3. **Transformer Encoder-Only**: Uses the encoder stack and the last token for prediction.
+4. **Transformer Decoder-Only**: GPT-style causal transformer.
+5. **Vanilla Transformer**: Full Encoder-Decoder architecture.
 
-```powershell
+## Installation
+
+```bash
+# Clone the repository
+git clone https://github.com/yourusername/stocks-trend-prediction.git
+cd stocks-trend-prediction
+
+# Create a virtual environment
 python -m venv venv
-```
+source venv/bin/activate  # Linux/Mac
+venv\Scripts\activate     # Windows
 
-### 2. Kích hoạt môi trường ảo
-Nếu gặp lỗi "running scripts is disabled", chạy lệnh này một lần (với quyền Administrator):
-
-```powershell
-Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
-```
-
-Sau đó kích hoạt venv:
-
-```powershell
-venv\Scripts\activate
-```
-
-### 3. Cài đặt thư viện cần thiết
-```powershell
+# Install dependencies
 pip install -r requirements.txt
 ```
 
-### 4. Thiết lập API Key cho Gemini (để sinh alpha tự động)
-Truy cập: https://aistudio.google.com/app/apikey → tạo key miễn phí
-Trong PowerShell (đang ở thư mục dự án và venv đã active), chạy:
+## Usage
 
-```powershell
-$env:GEMINI_API_KEY = "your_api_key_here"
+The project uses a CLI defined in `main.py`.
+
+### Run Full Benchmark
+
+Train and evaluate all models across all windows (5, 10, 15) and horizons (1, 5, 10):
+
+```bash
+python main.py benchmark
 ```
-### 5. Chạy dự án
-```powershell
-python main.py
+
+- Results are saved to `evaluation/benchmark_results.csv`.
+- Plots for `AAPL` and `PEP` are saved to `plot/`.
+
+### Run Single Experiment
+
+Train a specific model with custom parameters:
+
+```bash
+python main.py single --model lstm --window 10 --horizon 1
+python main.py single --model transformer_encoder --window 10 --horizon 1
+python main.py single --model transformer_decoder --window 10 --horizon 1
+python main.py single --model vanilla_transformer --window 10 --horizon 1
+python main.py single --model nbeats --window 10 --horizon 1
 ```
 
-### Quy trình sẽ diễn ra tự động:
+### Quick Test
 
-- Tải dữ liệu cổ phiếu từ Google Drive
-- Chia train/test (trước/sau năm 2023)
-- Thêm các chỉ báo kỹ thuật (SMA, EMA, RSI, MACD, Bollinger Bands, OBV…)
-- Gọi Gemini AI sinh 5 công thức alpha mới
-- Scale dữ liệu
-- Huấn luyện Transformer với context 20 ngày
-- Đánh giá dự đoán ngày kế tiếp bằng MSE, RMSE, MAE
-- In ví dụ dự đoán cụ thể
-- Vẽ biểu đồ so sánh giá thực tế (xanh) và giá dự đoán (đỏ đứt nét) cho từng cổ phiếu
+Run a fast test with only 2 models:
 
-### Kết quả đầu ra
+```bash
+python main.py test
+```
 
-- Metrics: MSE, RMSE, MAE
-- Ví dụ dự đoán chi tiết
-- Biểu đồ matplotlib cho từng cổ phiếu
-- Model tốt nhất được lưu tại best_model.pth
+## Evaluation Metrics
 
-### Tùy chỉnh (nếu muốn)
-
-- Thay đổi số ngày context: sửa window_size = 20 trong main.py
-- Thay đổi số epoch/learning rate: chỉnh trong hàm train_model() ở model.py
-
-### Lưu ý quan trọng
-
-- Lần đầu chạy sẽ mất khoảng 10-30 phút tùy cấu hình máy (do training model).
-- Nếu không set Gemini key → vẫn chạy nhưng không có alpha (kết quả kém hơn).
-- Mỗi lần mở PowerShell mới cần chạy lại lệnh activate venv và set GEMINI_API_KEY.
-
-Chúc bạn dự báo ngắn hạn chính xác và có kết quả tốt! 📈
+- **MAE**: Mean Absolute Error (on scaled log prices).
+- **MSE**: Mean Squared Error (on scaled log prices).
+- **Correlation**: Pearson correlation between predicted and actual movements.
+- **Plots**: Real price ($) comparison for visual verification.
