@@ -92,7 +92,7 @@ class BenchmarkRunner:
         self.output_horizons = output_horizons or OUTPUT_HORIZONS
         self.stocks = stocks or STOCKS
         self.output_dir = output_dir
-        self.plot_tickers = plot_tickers or ['AAPL', 'PEP']
+        self.plot_tickers = plot_tickers or STOCKS
         
         os.makedirs(output_dir, exist_ok=True)
         
@@ -120,7 +120,10 @@ class BenchmarkRunner:
                               window_size: int,
                               horizon: int,
                               verbose: bool = True,
-                              generate_plots: bool = True) -> Dict:
+                              generate_plots: bool = True,
+                              loss_type: str = 'directional',
+                              direction_weight: float = 5.0,
+                              var_weight: float = 0.1) -> Dict:
         """
         Run a single experiment.
         - Train on combined train/val
@@ -149,6 +152,9 @@ class BenchmarkRunner:
             patience=PATIENCE,
             verbose=verbose,
             save_best=True,
+            loss_type=loss_type,
+            direction_weight=direction_weight,
+            var_weight=var_weight,
             target_scaler=data.get('target_scaler')
         )
         
@@ -185,6 +191,7 @@ class BenchmarkRunner:
                 'input_window': window_size,
                 'output_horizon': horizon,
                 'model': model_type,
+                'loss_type': loss_type,
                 'ticker': ticker,
                 'mae': ticker_result['mae'],
                 'mse': ticker_result['mse'],
@@ -305,7 +312,7 @@ def run_benchmark(models: List[str] = None,
         output_horizons=output_horizons,
         stocks=stocks,
         output_dir=output_dir,
-        plot_tickers=plot_tickers or ['AAPL', 'PEP']
+        plot_tickers=plot_tickers or STOCKS
     )
     
     results_df = runner.run_all_experiments(verbose=verbose, generate_plots=generate_plots)
